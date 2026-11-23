@@ -20,70 +20,120 @@ SYSTEM_PROMPT = """
 """
 
 EXERCISE_MAP = {
-    "ضغط": "push ups 3d workout",
-    "بوش اب": "push ups 3d workout",
-    "سكوات": "squat 3d workout",
-    "قرفصاء": "squat 3d workout",
-    "عقلة": "pull ups 3d workout",
-    "متوازي": "dips 3d workout",
-    "بلانك": "plank 3d workout",
-    "بطن": "abs 3d workout",
-    "لانجز": "lunges 3d workout",
-    "كالستنكس": "calisthenics 3d workout",
+    "ضغط": "push ups exercise form",
+    "بوش اب": "push ups exercise form",
+    "سكوات": "squat exercise form",
+    "قرفصاء": "squat exercise form",
+    "عقلة": "pull ups exercise form",
+    "متوازي": "dips exercise form",
+    "بلانك": "plank exercise form",
+    "بطن": "abs workout form",
+    "لانجز": "lunges exercise form",
+    "كالستنكس": "calisthenics workout form",
 }
 
-BAD_WORDS = ("line art", "stick", "physicalfeed", "sketch", "coloring")
+BAD_WORDS = (
+    "line art",
+    "stick",
+    "physicalfeed",
+    "sketch",
+    "coloring",
+    "game",
+    "gameplay",
+    "roblox",
+    "minecraft",
+    "ps1",
+    "ps2",
+    "low poly",
+    "retro",
+    "cartoon",
+)
 
 
-def get_3d_gif(text: str):
+def get_exercise_gif(text: str):
     if not GIPHY_API_KEY:
         return None
 
     lower_text = text.lower()
-    query = None
+    base_query = None
 
     for ar_word, en_query in EXERCISE_MAP.items():
         if ar_word in lower_text:
-            query = en_query
+            base_query = en_query
             break
 
-    if not query:
+    if not base_query:
         en_part = re.findall(r"[a-zA-Z]{3,}(?:\s+[a-zA-Z0-9]+){0,3}", text)
         if en_part:
-            query = f"{en_part[0]} 3d workout"
+            clean_en = re.sub(r"\b(3d|gif|video|image|game)\b", "", en_part[0], flags=re.I).strip()
+            if len(clean_en) >= 3:
+                base_query = f"{clean_en} workout form"
 
-    if not query:
+    if not base_query:
         return None
 
-    try:
-        r = requests.get(
-            "https://api.giphy.com/v1/gifs/search",
-            params={
-                "api_key": GIPHY_API_KEY,
-                "q": query,
-                "limit": 8,
-                "rating": "g",
-                "lang": "en",
-            },
-            timeout=8,
-        )
-        if r.status_code != 200:
-            return None
+    queries = [
+        f"{base_query} 3d muscle",
+        f"{base_query} fitness tutorial",
+        base_query,
+    ]
 
-        for item in r.json().get("data", []):
-            title = (item.get("title") or "").lower()
-            if any(b in title for b in BAD_WORDS):
-                continue
-            imgs = item.get("images", {})
-            url = (
-                imgs.get("downsized_medium", {}).get("url")
-                or imgs.get("fixed_height", {}).get("url")
-                or imgs.get("original", {}).get("url")
+    for q in queries:
+        try:
+            r = requests.get(
+                "https://api.giphy.com/v1/gifs/search",
+                params={
+                    "api_key": GIPHY_API_KEY,
+                    "q": q,
+                    "limit": 12,
+                    "rating": "g",
+                    "lang": "en",
+                },
+                timeout=8,
             )
-            if url:
-                return url
-    except Exception:
-        return None
+            if r.status_code != 200:
+                continue
+
+            best_url = None
+            best_score = -1
+
+            for item in r.json().get("data", []):
+                title = (item.get("title") or "").lower()
+                if any(b in title for b in BAD_WORDS):
+                    continue
+
+                imgs = item.get("images", {})
+                orig = imgs.get("original", {})
+                url = orig.get("url") or imgs.get("downsized_large", {}).get("url")
+                if not url:
+                    continue
+
+                try:
+                    w = int(orig.get("width") or 0)
+                    h = int(orig.get("height") or 0)
+                except ValueError:
+                    w, h = 0, 0
+
+                # تجنب الصور الصغيرة جداً أو الضيقة للغاية
+                if w < 250 or h < 180:
+                    continue
+
+                score = 0
+                if w >= 400:
+                    score += 2
+                if any(k in title for k in ("workout", "exercise", "gym", "muscle", "fitness", "form")):
+                    score += 3
+                if "3d" in title:
+                    score += 2
+
+                if score > best_score:
+                    best_score = score
+                    best_url = url
+
+            if best_url:
+                return best_url
+        except Exception:
+            continue
 
     return None
 
@@ -105,7 +155,7 @@ for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
         if m.get("gif"):
-            st.image(m["gif"], caption="GIF 3D", use_container_width=True)
+            st.image(m["gif"], caption="توضيح أداء التمرين", width=420)
 
 prompt = st.chat_input("...اكتب تمرينك أو سؤالك هنا")
 
@@ -131,8 +181,8 @@ if prompt:
             st.stop()
 
         st.markdown(reply)
-        gif_url = get_3d_gif(f"{prompt} {reply}")
+        gif_url = get_exercise_gif(f"{prompt} {reply}")
         if gif_url:
-            st.image(gif_url, caption="GIF 3D", use_container_width=True)
+            st.image(gif_url, caption="توضيح أداء التمرين", width=420)
 
     st.session_state.messages.append({"role": "assistant", "content": reply, "gif": gif_url})
