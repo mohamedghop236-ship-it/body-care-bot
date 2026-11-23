@@ -22,11 +22,35 @@ if not api_key:
 
 client = Groq(api_key=api_key)
 
+# قاموس صور GIF لتمارين شائعة (يمكنك إضافة أو تعديل الروابط حسب رغبتك)
+EXERCISE_GIFS = {
+    "ضغط": "https://media.giphy.com/media/7Yeze6y8B6q3e/giphy.gif",
+    "push": "https://media.giphy.com/media/7Yeze6y8B6q3e/giphy.gif",
+    "سكوات": "https://media.giphy.com/media/1qfK1oq6X8a2U/giphy.gif",
+    "squat": "https://media.giphy.com/media/1qfK1oq6X8a2U/giphy.gif",
+    "بلانك": "https://media.giphy.com/media/3o7TKV58in42Y5T2mY/giphy.gif",
+    "plank": "https://media.giphy.com/media/3o7TKV58in42Y5T2mY/giphy.gif",
+    "عقلة": "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif",
+    "pull": "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif",
+    "معدة": "https://media.giphy.com/media/26AHONQ79FdWZhI0o/giphy.gif",
+    "abs": "https://media.giphy.com/media/26AHONQ79FdWZhI0o/giphy.gif",
+}
+
+
+def find_exercise_gif(text: str):
+    lowered = text.lower()
+    for key, url in EXERCISE_GIFS.items():
+        if key in lowered:
+            return url
+    return None
+
+
 system_msg = {
     "role": "system",
     "content": (
         "أنت كابتن جيم ولياقة وعناية شخصية عملي ومشجع باللغة العربية. "
-        "تابع تقدم المستخدم وقدم خطط تمارين وتغذية وعناية واضحة ومختصرة."
+        "تابع تقدم المستخدم وقدم خطط تمارين وتغذية وعناية واضحة ومختصرة. "
+        "عند شرح تمرين، اذكر اسمه بوضوح ووضح خطوات الأداء الصحيحة باختصار."
     ),
 }
 
@@ -36,6 +60,8 @@ if "messages" not in st.session_state:
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
+        if m.get("gif_url"):
+            st.image(m["gif_url"], caption="طريقة أداء التمرين", use_container_width=True)
 
 photo = st.camera_input("التقط صورة بالكاميرا")
 uploaded_img = st.file_uploader("أو ارفع صورة من جهازك", type=["jpg", "jpeg", "png"])
@@ -65,7 +91,10 @@ if prompt:
     with st.chat_message("user"):
         st.markdown(user_text)
 
-    api_msgs = [system_msg] + st.session_state.messages[-12:]
+    api_msgs = [system_msg] + [
+        {"role": msg["role"], "content": msg["content"]}
+        for msg in st.session_state.messages[-12:]
+    ]
     if selected_image is not None:
         api_msgs[-1] = {"role": "user", "content": user_content}
 
@@ -75,7 +104,12 @@ if prompt:
         messages=api_msgs,
     )
     reply = res.choices[0].message.content
+    gif_url = find_exercise_gif(reply + " " + prompt)
 
-    st.session_state.messages.append({"role": "assistant", "content": reply})
+    st.session_state.messages.append(
+        {"role": "assistant", "content": reply, "gif_url": gif_url}
+    )
     with st.chat_message("assistant"):
         st.markdown(reply)
+        if gif_url:
+            st.image(gif_url, caption="طريقة أداء التمرين", use_container_width=True)
