@@ -1,5 +1,8 @@
 import base64
+import json
 import os
+import urllib.parse
+import urllib.request
 import streamlit as st
 from groq import Groq
 
@@ -22,15 +25,60 @@ if not api_key:
 
 client = Groq(api_key=api_key)
 
-# ضع هنا فقط روابط GIF شغالة 100% ومضمونة من مصدرك
-EXERCISE_GIFS = {}
+giphy_key = None
+try:
+    if "GIPHY_API_KEY" in st.secrets:
+        giphy_key = st.secrets["GIPHY_API_KEY"]
+except Exception:
+    pass
+
+if not giphy_key:
+    giphy_key = os.environ.get("GIPHY_API_KEY")
 
 
-def find_exercise_gif(text: str):
-    lowered = text.lower()
-    for key, url in EXERCISE_GIFS.items():
-        if key in lowered and url:
-            return url
+def fetch_exercise_gif(query_text: str):
+    lowered = query_text.lower()
+
+    exercise_queries = {
+        "ضغط": "push up exercise gif",
+        "push": "push up exercise gif",
+        "سكوات": "squat exercise gif",
+        "squat": "squat exercise gif",
+        "بلانك": "plank exercise gif",
+        "plank": "plank exercise gif",
+        "عقلة": "pull up exercise gif",
+        "pull": "pull up exercise gif",
+        "معدة": "ab crunch exercise gif",
+        "abs": "ab crunch exercise gif",
+        "باي": "bicep curl exercise gif",
+        "تراي": "tricep dip exercise gif",
+        "كتف": "shoulder press exercise gif",
+        "رجل": "leg workout exercise gif",
+    }
+
+    search_query = None
+    for ar_or_en, q in exercise_queries.items():
+        if ar_or_en in lowered:
+            search_query = q
+            break
+
+    if not search_query:
+        return None
+
+    if giphy_key:
+        encoded = urllib.parse.quote(search_query)
+        url = f"https://api.giphy.com/v1/gifs/search?api_key={giphy_key}&q={encoded}&limit=3&rating=g"
+        try:
+            with urllib.request.urlopen(url, timeout=6) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                items = data.get("data", [])
+                for item in items:
+                    gif_url = item.get("images", {}).get("original", {}).get("url")
+                    if gif_url:
+                        return gif_url
+        except Exception:
+            pass
+
     return None
 
 
@@ -51,7 +99,7 @@ for m in st.session_state.messages:
         st.markdown(m["content"])
         if m.get("gif_url"):
             try:
-                st.image(m["gif_url"], caption="طريقة أداء التمرين", use_container_width=True)
+                st.image(m["gif_url"], caption="صورة GIF متحركة لأداء التمرين", use_container_width=True)
             except Exception:
                 pass
 
@@ -96,7 +144,7 @@ if prompt:
         messages=api_msgs,
     )
     reply = res.choices[0].message.content
-    gif_url = find_exercise_gif(reply + " " + prompt)
+    gif_url = fetch_exercise_gif(prompt + " " + reply)
 
     st.session_state.messages.append(
         {"role": "assistant", "content": reply, "gif_url": gif_url}
@@ -105,6 +153,6 @@ if prompt:
         st.markdown(reply)
         if gif_url:
             try:
-                st.image(gif_url, caption="طريقة أداء التمرين", use_container_width=True)
+                st.image(gif_url, caption="صورة GIF متحركة لأداء التمرين", use_container_width=True)
             except Exception:
                 pass
