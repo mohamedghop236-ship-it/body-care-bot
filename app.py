@@ -1,158 +1,168 @@
-import base64
-import json
-import os
-import urllib.parse
-import urllib.request
+import re
+import requests
 import streamlit as st
 from groq import Groq
 
-st.set_page_config(page_title="كابتن الجيم والعناية", page_icon="💪")
-st.title("💪 كابتن الجيم والعناية")
+st.set_page_config(
+    page_title="كابتن الجيم والعناية",
+    page_icon="💪",
+    layout="centered",
+)
 
-api_key = None
-try:
-    if "GROQ_API_KEY" in st.secrets:
-        api_key = st.secrets["GROQ_API_KEY"]
-except Exception:
-    pass
+# --- قراءة المفاتيح من Streamlit Secrets ---
+GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+GIPHY_API_KEY = st.secrets.get("GIPHY_API_KEY", "")
 
-if not api_key:
-    api_key = os.environ.get("GROQ_API_KEY")
-
-if not api_key:
-    st.error("اضبط GROQ_API_KEY أولاً في Secrets أو التيرمنال.")
+if not GROQ_API_KEY:
+    st.error("يرجى إضافة GROQ_API_KEY داخل إعدادات Secrets في Streamlit Cloud.")
     st.stop()
 
-client = Groq(api_key=api_key)
+client = Groq(api_key=GROQ_API_KEY)
 
-giphy_key = None
-try:
-    if "GIPHY_API_KEY" in st.secrets:
-        giphy_key = st.secrets["GIPHY_API_KEY"]
-except Exception:
-    pass
+SYSTEM_PROMPT = """
+أنت كابتن لياقة بدنية وكالستنكس وجيم وعناية شخصية محترف، ودود ومباشر.
+قدم خطط تمارين عملية، وتوضيحاً واضحاً للعضلات المستهدفة ونصائح الأداء الصحيح والتغذية.
+عندما يسأل المستخدم عن تمرين معين، اذكر اسم التمرين بوضوح في ردك.
+أجب باللغة العربية بشكل منظم ومفيد.
+"""
 
-if not giphy_key:
-    giphy_key = os.environ.get("GIPHY_API_KEY")
+# --- قاموس ترجمة شائع لتحسين البحث عن GIF ثلاثي الأبعاد ---
+ARABIC_TO_EN_EXERCISES = {
+    "ضغط": "push ups",
+    "تمرين ضغط": "push ups",
+    "بوش اب": "push ups",
+    "سكوات": "squat",
+    "قرفصاء": "squat",
+    "عقلة": "pull ups",
+    "سحب": "pull ups",
+    "متوازي": "dips workout",
+    "بلانك": "plank exercise",
+    "بطن": "abs workout",
+    "كرانش": "crunches workout",
+    "لانجز": "lunges workout",
+    "اندفاع": "lunges workout",
+    "ديدليفت": "deadlift workout",
+    "كتف": "shoulder workout",
+    "بايسبس": "bicep curls workout",
+    "ترايسبس": "tricep workout",
+    "كالستنكس": "calisthenics workout",
+}
+
+BLOCKED_KEYWORDS = (
+    "line art",
+    "line drawing",
+    "stick figure",
+    "stickman",
+    "physicalfeed",
+    "sketch",
+    "coloring",
+)
 
 
-def fetch_exercise_gif(query_text: str):
-    lowered = query_text.lower()
+def extract_exercise_query(user_text: str, assistant_reply: str) -> str:
+    combined = f"{user_text} {assistant_reply}".lower()
 
-    exercise_queries = {
-        "ضغط": "push up exercise gif",
-        "push": "push up exercise gif",
-        "سكوات": "squat exercise gif",
-        "squat": "squat exercise gif",
-        "بلانك": "plank exercise gif",
-        "plank": "plank exercise gif",
-        "عقلة": "pull up exercise gif",
-        "pull": "pull up exercise gif",
-        "معدة": "ab crunch exercise gif",
-        "abs": "ab crunch exercise gif",
-        "باي": "bicep curl exercise gif",
-        "تراي": "tricep dip exercise gif",
-        "كتف": "shoulder press exercise gif",
-        "رجل": "leg workout exercise gif",
-    }
+    for ar_term, en_term in ARABIC_TO_EN_EXERCISES.items():
+        if ar_term in combined:
+            return en_term
 
-    search_query = None
-    for ar_or_en, q in exercise_queries.items():
-        if ar_or_en in lowered:
-            search_query = q
-            break
+    en_matches = re.findall(r"[a-zA-Z][a-zA-Z\s\-]{2,30}", user_text)
+    if en_matches:
+        cleaned = re.sub(r"\b(gif|3d|video|image|صورة|تمرين|عايز|عاوز|وريني)\b", "", en_matches[0], flags=re.I).strip()
+        if len(cleaned) >= 3:
+            return cleaned
 
-    if not search_query:
+    cleaned_ar = re.sub(r"(عايز|عاوز|وريني|اظهرلي|شرح|تمرين|اتمرن|عن|في|بالله|لو سمحت)", " ", user_text).strip()
+    return cleaned_ar[:35] if cleaned_ar else "3d fitness workout"
+
+
+def fetch_exercise_gif(exercise_query: str) -> str | None:
+    if not GIPHY_API_KEY:
         return None
 
-    if giphy_key:
-        encoded = urllib.parse.quote(search_query)
-        url = f"https://api.giphy.com/v1/gifs/search?api_key={giphy_key}&q={encoded}&limit=3&rating=g"
+    base_q = exercise_query.strip()
+    queries = [
+        f"{base_q} 3d animation workout",
+        f"{base_q} 3d exercise",
+        f"{base_q} 3d muscle workout",
+        f"{base_q} workout animation",
+    ]
+
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    for q in queries:
         try:
-            with urllib.request.urlopen(url, timeout=6) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                items = data.get("data", [])
-                for item in items:
-                    gif_url = item.get("images", {}).get("original", {}).get("url")
-                    if gif_url:
-                        return gif_url
+            resp = requests.get(
+                "https://api.giphy.com/v1/gifs/search",
+                params={
+                    "api_key": GIPHY_API_KEY,
+                    "q": q,
+                    "limit": 10,
+                    "rating": "g",
+                    "lang": "en",
+                },
+                headers=headers,
+                timeout=8,
+            )
+            if resp.status_code != 200:
+                continue
+
+            results = resp.json().get("data", [])
+            # تفضيل النتائج التي تحتوي على كلمات 3D أو animation ولا تحتوي على رسوم خطية
+            scored_results = []
+            for item in results:
+                title = (item.get("title") or "").lower()
+                if any(bad in title for bad in BLOCKED_KEYWORDS):
+                    continue
+
+                images = item.get("images", {})
+                gif_url = (
+                    images.get("downsized_medium", {}).get("url")
+                    or images.get("fixed_height", {}).get("url")
+                    or images.get("original", {}).get("url")
+                )
+                if not gif_url:
+                    continue
+
+                score = 0
+                if "3d" in title:
+                    score += 3
+                if "workout" in title or "exercise" in title:
+                    score += 2
+                if "animation" in title or "fitness" in title:
+                    score += 1
+
+                scored_results.append((score, gif_url))
+
+            if scored_results:
+                scored_results.sort(key=lambda x: x[0], reverse=True)
+                return scored_results[0][1]
+
         except Exception:
-            pass
+            continue
 
     return None
 
 
-system_msg = {
-    "role": "system",
-    "content": (
-        "أنت كابتن جيم ولياقة وعناية شخصية عملي ومشجع باللغة العربية. "
-        "تابع تقدم المستخدم وقدم خطط تمارين وتغذية وعناية واضحة ومختصرة. "
-        "عند شرح تمرين، اذكر اسمه بوضوح ووضح خطوات الأداء الصحيحة باختصار."
-    ),
-}
-
+# --- تهيئة سجل المحادثة لكل مستخدم ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-for m in st.session_state.messages:
-    with st.chat_message(m["role"]):
-        st.markdown(m["content"])
-        if m.get("gif_url"):
-            try:
-                st.image(m["gif_url"], caption="صورة GIF متحركة لأداء التمرين", use_container_width=True)
-            except Exception:
-                pass
+st.title("💪 كابتن الجيم والعناية")
+st.caption("اسأل عن تمارين الكالستنكس والجيم والدايت، واحصل على شرح وصورة GIF ثلاثية الأبعاد للتوضيح.")
 
-photo = st.camera_input("التقط صورة بالكاميرا")
-uploaded_img = st.file_uploader("أو ارفع صورة من جهازك", type=["jpg", "jpeg", "png"])
-selected_image = photo or uploaded_img
+# --- أدوات مساعدة للصور والكاميرا ---
+with st.expander("📷 إرفاق صورة أو التقاط صورة بالكاميرا (اختياري)"):
+    uploaded_img = st.file_uploader("ارفع صورة", type=["png", "jpg", "jpeg", "webp"])
+    camera_img = st.camera_input("التقط صورة")
+    if uploaded_img is not None:
+        st.image(uploaded_img, caption="الصورة المرفوعة", use_container_width=True)
+    elif camera_img is not None:
+        st.image(camera_img, caption="الصورة الملتقطة", use_container_width=True)
 
-if selected_image is not None:
-    st.image(selected_image, caption="الصورة المختارة", use_container_width=True)
-
-prompt = st.chat_input("اكتب تمرينك أو سؤالك هنا...")
-if prompt:
-    user_text = prompt
-    if selected_image is not None:
-        img_bytes = selected_image.getvalue()
-        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
-        mime_type = selected_image.type or "image/jpeg"
-        user_content = [
-            {"type": "text", "text": prompt},
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:{mime_type};base64,{img_b64}"},
-            },
-        ]
-    else:
-        user_content = prompt
-
-    st.session_state.messages.append({"role": "user", "content": user_text})
-    with st.chat_message("user"):
-        st.markdown(user_text)
-
-    api_msgs = [system_msg] + [
-        {"role": msg["role"], "content": msg["content"]}
-        for msg in st.session_state.messages[-12:]
-    ]
-    if selected_image is not None:
-        api_msgs[-1] = {"role": "user", "content": user_content}
-
-    res = client.chat.completions.create(
-        model="qwen/qwen3.8-27b",
-        max_tokens=700,
-        messages=api_msgs,
-    )
-    reply = res.choices[0].message.content
-    gif_url = fetch_exercise_gif(prompt + " " + reply)
-
-    st.session_state.messages.append(
-        {"role": "assistant", "content": reply, "gif_url": gif_url}
-    )
-    with st.chat_message("assistant"):
-        st.markdown(reply)
-        if gif_url:
-            try:
-                st.image(gif_url, caption="صورة GIF متحركة لأداء التمرين", use_container_width=True)
-            except Exception:
-                pass
+# --- عرض الرسائل السابقة ---
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+        if msg.get("gif_url"):
+            st.image(msg["gif_url"], caption="صورة GIF توضيحية لأداء التمرين (3D)", use_container_width=True)
