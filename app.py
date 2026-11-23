@@ -130,4 +130,128 @@ def get_gifs_for_query(base_query: str, count: int = 3) -> list[str]:
             if r.status_code != 200:
                 continue
 
-            for item in r
+            for item in r.json().get("data", []):
+                title = (item.get("title") or "").lower()
+                if any(b in title for b in BAD_WORDS):
+                    continue
+
+                imgs = item.get("images", {})
+                orig = imgs.get("original", {})
+                url = orig.get("url") or imgs.get("downsized_large", {}).get("url")
+                if not url or url in seen:
+                    continue
+
+                try:
+                    w = int(orig.get("width") or 0)
+                    h = int(orig.get("height") or 0)
+                except ValueError:
+                    w, h = 0, 0
+
+                if w < 220 or h < 150:
+                    continue
+
+                seen.add(url)
+                urls.append(url)
+                if len(urls) >= count:
+                    return urls
+        except Exception:
+            continue
+
+    return urls
+
+
+def render_exercises_gallery(msg_idx: int, exercise_items: list[dict]):
+    if not exercise_items:
+        return
+
+    st.markdown("---")
+    st.markdown("### 🏋️ شرح التمارين بالصور المتحركة (GIF)")
+
+    for ex_idx, ex in enumerate(exercise_items):
+        label = ex["label"]
+        query = ex["query"]
+        gifs = ex.get("gifs") or get_gifs_for_query(query, count=3)
+
+        st.markdown(f"**{ex_idx + 1}. {label}**")
+
+        if gifs:
+            state_key = f"gif_{msg_idx}_{ex_idx}"
+            if state_key not in st.session_state:
+                st.session_state[state_key] = 0
+
+            curr = st.session_state[state_key] % len(gifs)
+            st.image(gifs[curr], caption=f"طريقة أداء: {label}", width=400)
+
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                if len(gifs) > 1 and st.button(
+                    "🔄 صورة تانية", key=f"btn_{msg_idx}_{ex_idx}"
+                ):
+                    st.session_state[state_key] = (curr + 1) % len(gifs)
+                    st.rerun()
+            with c2:
+                yt_q = urllib.parse.quote(f"{query} 3d exercise")
+                st.markdown(
+                    f"[🎬 فيديو 3D على يوتيوب](https://www.youtube.com/results?search_query={yt_q})"
+                )
+        else:
+            st.caption("لم يتم العثور على صورة GIF مناسبة لهذا التمرين حالياً.")
+
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+st.title("💪 كابتن الجيم والعناية")
+
+with st.expander("📷 الكاميرا ورفع الصور", expanded=False):
+    uploaded = st.file_uploader("ارفع صورة", type=["png", "jpg", "jpeg", "webp"])
+    cam = st.camera_input("التقط صورة")
+    if uploaded:
+        st.image(uploaded, use_container_width=True)
+    elif cam:
+        st.image(cam, use_container_width=True)
+
+for idx, m in enumerate(st.session_state.messages):
+    with st.chat_message(m["role"]):
+        st.markdown(m["content"])
+        if m.get("exercise_items"):
+            render_exercises_gallery(idx, m["exercise_items"])
+
+prompt = st.chat_input("...اكتب تمرينك أو سؤالك هنا")
+
+if prompt:
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    msgs = [{"role": "system", "content": SYSTEM_PROMPT}] + [
+        {"role": x["role"], "content": x["content"]} for x in st.session_state.messages
+    ]
+
+    with st.chat_message("assistant"):
+        try:
+            resp = client.chat.completions.create(
+                model="qwen/qwen3.8-27b",
+                max_tokens=700,
+                messages=msgs,
+            )
+            reply = resp.choices[0].message.content or ""
+        except Exception as e:
+            st.error(f"خطأ: {e}")
+            st.stop()
+
+        st.markdown(reply)
+
+        detected = extract_exercises_from_text(f"{prompt}\n{reply}", max_items=4)
+        enriched_items = []
+        for item in detected:
+            enriched_items.append(
+                {
+                    "label": item["label"],
+                    "query": item["query"],
+                    "gifs": get_gifs_for_query(item["query"], count=3),
+                }
+            )
+
+        msg_idx = len(st.session_state.messages)
+        render_exercises_gallery(msg_idx,
