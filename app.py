@@ -1,257 +1,81 @@
 import re
-import urllib.parse
 import requests
 import streamlit as st
 from groq import Groq
 
 st.set_page_config(page_title="كابتن الجيم والعناية", page_icon="💪")
+client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+GIPHY_KEY = st.secrets.get("GIPHY_API_KEY", "")
 
-GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
-GIPHY_API_KEY = st.secrets.get("GIPHY_API_KEY", "")
-
-if not GROQ_API_KEY:
-    st.error("أضف GROQ_API_KEY في Streamlit Secrets.")
-    st.stop()
-
-client = Groq(api_key=GROQ_API_KEY)
-
-SYSTEM_PROMPT = """
-أنت كابتن جيم وكالستنكس وعناية شخصية محترف ومساعد.
-جاوب بالعربية بشكل واضح ومنظم.
-عندما تقترح أو تشرح مجموعة تمارين، اذكر كل تمرين في نقطة واضحة واكتب اسمه العربي واسمه الإنجليزي إن أمكن (مثال: 1. تمرين الضغط (Push-Up): ...).
-"""
-
-KNOWN_EXERCISES = [
-    ("ضغط", "تمرين الضغط (Push-Up)", "push ups exercise form"),
-    ("بوش اب", "تمرين الضغط (Push-Up)", "push ups exercise form"),
-    ("push-up", "تمرين الضغط (Push-Up)", "push ups exercise form"),
-    ("push up", "تمرين الضغط (Push-Up)", "push ups exercise form"),
-    ("سكوات", "تمرين السكوات (Squat)", "squat exercise form"),
-    ("قرفصاء", "تمرين السكوات (Squat)", "squat exercise form"),
-    ("squat", "تمرين السكوات (Squat)", "squat exercise form"),
-    ("عقلة", "تمرين العقلة (Pull-Up)", "pull ups exercise form"),
-    ("سحب", "تمرين العقلة (Pull-Up)", "pull ups exercise form"),
-    ("pull-up", "تمرين العقلة (Pull-Up)", "pull ups exercise form"),
-    ("pull up", "تمرين العقلة (Pull-Up)", "pull ups exercise form"),
-    ("متوازي", "تمرين المتوازي (Dips)", "dips exercise form"),
-    ("dips", "تمرين المتوازي (Dips)", "dips exercise form"),
-    ("بلانك", "تمرين البلانك (Plank)", "plank exercise form"),
-    ("plank", "تمرين البلانك (Plank)", "plank exercise form"),
-    ("بطن", "تمارين البطن (Abs)", "abs workout form"),
-    ("abs", "تمارين البطن (Abs)", "abs workout form"),
-    ("لانجز", "تمرين الاندفاع (Lunges)", "lunges exercise form"),
-    ("اندفاع", "تمرين الاندفاع (Lunges)", "lunges exercise form"),
-    ("lunges", "تمرين الاندفاع (Lunges)", "lunges exercise form"),
-    ("ديدليفت", "تمرين الديدليفت (Deadlift)", "deadlift exercise form"),
-    ("deadlift", "تمرين الديدليفت (Deadlift)", "deadlift exercise form"),
-    ("كتف", "تمارين الكتف (Shoulder Press)", "shoulder workout form"),
-    ("بايسبس", "تمرين البايسبس (Bicep Curls)", "bicep curls workout form"),
-    ("ترايسبس", "تمرين الترايسبس (Triceps)", "tricep workout form"),
+EXERCISES = [
+    ("ضغط", "تمرين الضغط (Push-Up)", "push ups workout"),
+    ("سكوات", "تمرين السكوات (Squat)", "squat workout"),
+    ("عقلة", "تمرين العقلة (Pull-Up)", "pull ups workout"),
+    ("متوازي", "تمرين المتوازي (Dips)", "dips workout"),
+    ("بلانك", "تمرين البلانك (Plank)", "plank workout"),
+    ("بطن", "تمارين البطن (Abs)", "abs workout"),
 ]
 
-BAD_WORDS = (
-    "line art",
-    "stick",
-    "physicalfeed",
-    "sketch",
-    "coloring",
-    "game",
-    "gameplay",
-    "roblox",
-    "minecraft",
-    "ps1",
-    "ps2",
-    "low poly",
-    "retro",
-    "cartoon",
-)
-
-
-def extract_exercises_from_text(text: str, max_items: int = 4) -> list[dict]:
-    lower_text = text.lower()
-    found = []
-    used_labels = set()
-
-    for keyword, ar_label, en_query in KNOWN_EXERCISES:
-        if keyword in lower_text and ar_label not in used_labels:
-            used_labels.add(ar_label)
-            found.append({"label": ar_label, "query": en_query})
-            if len(found) >= max_items:
-                break
-
-    if not found:
-        en_matches = re.findall(r"[a-zA-Z]{3,}(?:\s+[a-zA-Z0-9]+){0,2}", text)
-        for m in en_matches:
-            cleaned = re.sub(
-                r"\b(3d|gif|video|image|game|workout|exercise)\b",
-                "",
-                m,
-                flags=re.I,
-            ).strip()
-            if len(cleaned) >= 3:
-                found.append(
-                    {
-                        "label": f"تمرين {cleaned.title()}",
-                        "query": f"{cleaned} workout form",
-                    }
-                )
-                break
-
-    return found
-
-
-@st.cache_data(show_spinner=False, ttl=3600)
-def get_gifs_for_query(base_query: str, count: int = 3) -> list[str]:
-    if not GIPHY_API_KEY:
-        return []
-
-    queries = [
-        f"{base_query} 3d",
-        f"{base_query} fitness tutorial",
-        base_query,
-    ]
-
-    urls = []
-    seen = set()
-
-    for q in queries:
-        try:
-            r = requests.get(
-                "https://api.giphy.com/v1/gifs/search",
-                params={
-                    "api_key": GIPHY_API_KEY,
-                    "q": q,
-                    "limit": 10,
-                    "rating": "g",
-                    "lang": "en",
-                },
-                timeout=8,
-            )
-            if r.status_code != 200:
+@st.cache_data(ttl=3600)
+def fetch_gif(q):
+    if not GIPHY_KEY:
+        return None
+    try:
+        r = requests.get("https://api.giphy.com/v1/gifs/search", params={"api_key": GIPHY_KEY, "q": q, "limit": 5, "rating": "g"}, timeout=6)
+        for item in r.json().get("data", []):
+            title = (item.get("title") or "").lower()
+            if any(w in title for w in ("stick", "line art", "physicalfeed", "game", "roblox", "minecraft")):
                 continue
+            url = item.get("images", {}).get("original", {}).get("url")
+            if url:
+                return url
+    except Exception:
+        pass
+    return None
 
-            for item in r.json().get("data", []):
-                title = (item.get("title") or "").lower()
-                if any(b in title for b in BAD_WORDS):
-                    continue
+def show_exercises(txt):
+    low = txt.lower()
+    shown = 0
+    for key, label, query in EXERCISES:
+        if key in low:
+            st.markdown(f"**{label}**")
+            g = fetch_gif(query)
+            if g:
+                st.image(g, width=380)
+            shown += 1
+            if shown >= 4:
+                break
 
-                imgs = item.get("images", {})
-                orig = imgs.get("original", {})
-                url = orig.get("url") or imgs.get("downsized_large", {}).get("url")
-                if not url or url in seen:
-                    continue
-
-                try:
-                    w = int(orig.get("width") or 0)
-                    h = int(orig.get("height") or 0)
-                except ValueError:
-                    w, h = 0, 0
-
-                if w < 220 or h < 150:
-                    continue
-
-                seen.add(url)
-                urls.append(url)
-                if len(urls) >= count:
-                    return urls
-        except Exception:
-            continue
-
-    return urls
-
-
-def render_exercises_gallery(msg_idx: int, exercise_items: list[dict]):
-    if not exercise_items:
-        return
-
-    st.markdown("---")
-    st.markdown("### 🏋️ شرح التمارين بالصور المتحركة (GIF)")
-
-    for ex_idx, ex in enumerate(exercise_items):
-        label = ex["label"]
-        query = ex["query"]
-        gifs = ex.get("gifs") or get_gifs_for_query(query, count=3)
-
-        st.markdown(f"**{ex_idx + 1}. {label}**")
-
-        if gifs:
-            state_key = f"gif_{msg_idx}_{ex_idx}"
-            if state_key not in st.session_state:
-                st.session_state[state_key] = 0
-
-            curr = st.session_state[state_key] % len(gifs)
-            st.image(gifs[curr], caption=f"طريقة أداء: {label}", width=400)
-
-            c1, c2 = st.columns([1, 2])
-            with c1:
-                if len(gifs) > 1 and st.button(
-                    "🔄 صورة تانية", key=f"btn_{msg_idx}_{ex_idx}"
-                ):
-                    st.session_state[state_key] = (curr + 1) % len(gifs)
-                    st.rerun()
-            with c2:
-                yt_q = urllib.parse.quote(f"{query} 3d exercise")
-                st.markdown(
-                    f"[🎬 فيديو 3D على يوتيوب](https://www.youtube.com/results?search_query={yt_q})"
-                )
-        else:
-            st.caption("لم يتم العثور على صورة GIF مناسبة لهذا التمرين حالياً.")
-
-
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+if "msgs" not in st.session_state:
+    st.session_state.msgs = []
 
 st.title("💪 كابتن الجيم والعناية")
 
 with st.expander("📷 الكاميرا ورفع الصور", expanded=False):
-    uploaded = st.file_uploader("ارفع صورة", type=["png", "jpg", "jpeg", "webp"])
+    up = st.file_uploader("ارفع صورة", type=["png", "jpg", "jpeg", "webp"])
     cam = st.camera_input("التقط صورة")
-    if uploaded:
-        st.image(uploaded, use_container_width=True)
+    if up:
+        st.image(up, use_container_width=True)
     elif cam:
         st.image(cam, use_container_width=True)
 
-for idx, m in enumerate(st.session_state.messages):
+for m in st.session_state.msgs:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
-        if m.get("exercise_items"):
-            render_exercises_gallery(idx, m["exercise_items"])
+        if m["role"] == "assistant":
+            show_exercises(m["content"])
 
 prompt = st.chat_input("...اكتب تمرينك أو سؤالك هنا")
-
 if prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    st.session_state.msgs.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    msgs = [{"role": "system", "content": SYSTEM_PROMPT}] + [
-        {"role": x["role"], "content": x["content"]} for x in st.session_state.messages
-    ]
-
+    api_msgs = [{"role": "system", "content": "أنت كابتن جيم وكالستنكس وعناية شخصية محترف. جاوب بالعربية واذكر أسماء التمارين بوضوح."}] + st.session_state.msgs
     with st.chat_message("assistant"):
-        try:
-            resp = client.chat.completions.create(
-                model="qwen/qwen3.8-27b",
-                max_tokens=700,
-                messages=msgs,
-            )
-            reply = resp.choices[0].message.content or ""
-        except Exception as e:
-            st.error(f"خطأ: {e}")
-            st.stop()
-
+        res = client.chat.completions.create(model="qwen/qwen3.8-27b", max_tokens=700, messages=api_msgs)
+        reply = res.choices[0].message.content or ""
         st.markdown(reply)
+        show_exercises(f"{prompt} {reply}")
 
-        detected = extract_exercises_from_text(f"{prompt}\n{reply}", max_items=4)
-        enriched_items = []
-        for item in detected:
-            enriched_items.append(
-                {
-                    "label": item["label"],
-                    "query": item["query"],
-                    "gifs": get_gifs_for_query(item["query"], count=3),
-                }
-            )
-
-        msg_idx = len(st.session_state.messages)
-        render_exercises_gallery(msg_idx,
+    st.session_state.msgs.append({"role": "assistant", "content": reply})
